@@ -51,6 +51,11 @@ def locate(value: str | None, default_name: str | None, must_exist: bool = True)
     return None
 
 
+def is_model_file(path: Path | None) -> bool:
+    # HF-cache entries are symlinks to hash-named blobs, so only require a file.
+    return bool(path) and path.is_file()
+
+
 class Engine:
     """Serialized access to the CLI binary."""
 
@@ -66,14 +71,23 @@ class Engine:
             problems.append(f"engine binary not found ({args.binary or ', '.join(BINARY_CANDIDATES)}); "
                             f"build it first, e.g. `make irodori-onemkl MKL_ROOT=...` or `make blas` in {ENGINE_DIR}")
         weights = locate(args.weights, "weights", must_exist=False) or ENGINE_DIR / "weights"
-        model = locate(args.model, None) if args.model else None
+        model = None
+        tried = []
+        for label, candidate in (("--model", Path(args.model) if args.model else None),
+                                 ("weights/", weights / "model.safetensors"),
+                                 ("$IRO_MODEL", Path(os.environ["IRO_MODEL"]) if os.environ.get("IRO_MODEL") else None)):
+            if candidate is None:
+                continue
+            resolved = locate(str(candidate), None, must_exist=False)
+            if is_model_file(resolved):
+                model = resolved
+                break
+            tried.append(f"{label}: {candidate} ({'is a directory' if resolved and resolved.is_dir() else 'not found'})")
         if model is None:
-            for candidate in (weights / "model.safetensors", Path(os.environ.get("IRO_MODEL", "")) if os.environ.get("IRO_MODEL") else None):
-                if candidate and candidate.exists():
-                    model = candidate.resolve()
-                    break
-        if model is None:
-            problems.append("model.safetensors not found: put it in weights/, set IRO_MODEL, or pass --model /path/to/model.safetensors")
+            problems.append("no usable model.safetensors (" + "; ".join(tried) +
+                            "); put it in weights/, set IRO_MODEL to the file, or pass --model /path/to/model.safetensors")
+        if binary is not None and not (binary.is_file() and os.access(binary, os.X_OK)):
+            problems.append(f"{binary} is not an executable file")
         self.tokenizer = weights / "tokenizer.bin"
         self.decoder = weights / "dacvae_decoder.safetensors"
         self.encoder = weights / "dacvae_encoder.safetensors"
