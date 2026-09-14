@@ -23,6 +23,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -184,23 +185,59 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, obj: dict) -> None:
         self._send(code, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
-    def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
+    def _send_wav(self, path: Path, head: bool = False) -> None:
+        """Serve a WAV with byte-range support so browser players can seek."""
+        data = path.read_bytes()
+        total = len(data)
+        start, end = 0, total - 1
+        status = 200
+        rng = self.headers.get("Range")
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng or "")
+        if m and (m[1] or m[2]):
+            if m[1]:
+                start = int(m[1]); end = int(m[2]) if m[2] else total - 1
+            else:
+                start = max(total - int(m[2]), 0)
+            end = min(end, total - 1)
+            if start > end:
+                self.send_response(416); self.send_header("Content-Range", f"bytes */{total}"); self.end_headers(); return
+            status = 206
+        body = data[start:end + 1]
+        self.send_response(status)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(body)))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+
+    def _route(self, head: bool = False) -> None:
+        route = urlsplit(self.path).path
+        if route in ("/", "/index.html"):
             self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-        elif self.path == "/api/info":
+        elif route == "/api/info":
             self._json(200, self.engine.info())
-        elif self.path.startswith("/outputs/"):
-            name = Path(self.path).name
+        elif route.startswith("/outputs/"):
+            name = Path(route).name
             path = self.engine.outputs / name
-            if re.fullmatch(r"[0-9a-f]{12}\.wav", name) and path.exists():
-                self._send(200, path.read_bytes(), "audio/wav")
+            if re.fullmatch(r"[0-9a-f]{12}\.wav", name) and path.is_file():
+                self._send_wav(path, head)
             else:
                 self._json(404, {"error": "not found"})
         else:
             self._json(404, {"error": "not found"})
 
+    def do_GET(self) -> None:
+        self._route()
+
+    def do_HEAD(self) -> None:
+        self._route(head=True)
+
     def do_POST(self) -> None:
-        if self.path != "/api/generate":
+        if urlsplit(self.path).path != "/api/generate":
             self._json(404, {"error": "not found"})
             return
         length = int(self.headers.get("Content-Length", "0"))
