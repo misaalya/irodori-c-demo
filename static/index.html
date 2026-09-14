@@ -28,6 +28,13 @@
   #error { color: #c0392b; white-space: pre-wrap; }
   audio { width: 100%; margin-top: 12px; }
   #status { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); user-select: none; }
+  summary:hover { color: var(--fg); }
+  pre#log { margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-word; color: var(--fg); }
 </style>
 </head>
 <body>
@@ -64,7 +71,10 @@
   <div class="card" id="result" hidden>
     <audio id="audio" controls></audio>
     <table id="stats"></table>
-    <details><summary>Engine log</summary><pre id="log"></pre></details>
+    <details>
+      <summary>Engine log</summary>
+      <pre id="log"></pre>
+    </details>
   </div>
 </main>
 
