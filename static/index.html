@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Irodori C demo</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --bg: #f5f5f7; --card: #fff; --line: #d9d9de; --accent: #2d6cdf; --muted: #6e6e73; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #f2f2f2; --bg: #17171a; --card: #222226; --line: #3a3a40; --accent: #6ea0ff; --muted: #9a9aa2; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
+  label:first-child { margin-top: 0; }
+  textarea, input[type=text], input[type=number], select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+  textarea { min-height: 84px; resize: vertical; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 140px; }
+  button { margin-top: 16px; padding: 10px 18px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  td { padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  td:first-child { color: var(--muted); width: 40%; }
+  #error { color: #c0392b; white-space: pre-wrap; }
+  audio { width: 100%; margin-top: 12px; }
+  #status { font-size: 13px; color: var(--muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Irodori C demo</h1>
+  <p class="sub" id="info">Loading engine info…</p>
+
+  <form class="card" id="form">
+    <label for="text">Text (Japanese)</label>
+    <textarea id="text" required>こんにちは、色とりどりの世界へようこそ。</textarea>
+
+    <label for="caption">Caption / style (optional)</label>
+    <input type="text" id="caption" placeholder="落ち着いた自然な女性の声で、やわらかく話す。">
+
+    <label for="ref">Reference WAV for voice cloning (optional)</label>
+    <input type="file" id="ref" accept=".wav,audio/wav">
+    <div class="hint">Clean single-speaker recording, any sample rate. Leave empty for the default voice.</div>
+
+    <div class="row">
+      <div><label for="steps">Steps</label><input type="number" id="steps" value="8" min="1" max="200"></div>
+      <div><label for="seed">Seed</label><input type="number" id="seed" value="42" min="0"></div>
+      <div><label for="dit">DiT precision</label>
+        <select id="dit"><option value="int8">int8 (fast)</option><option value="fp32">fp32 (reference)</option></select></div>
+      <div><label for="codec">Codec precision</label>
+        <select id="codec"><option value="int8">int8 (fast)</option><option value="fp32">fp32 (reference)</option></select></div>
+    </div>
+    <div class="hint">8 steps ≈ preview quality, 40 = final quality. int8 needs an oneMKL build on a VNNI-capable CPU; otherwise choose fp32.</div>
+
+    <button id="go" type="submit">Generate</button>
+    <div id="status"></div>
+    <div id="error"></div>
+  </form>
+
+  <div class="card" id="result" hidden>
+    <audio id="audio" controls></audio>
+    <table id="stats"></table>
+    <details><summary>Engine log</summary><pre id="log"></pre></details>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+fetch('/api/info').then(r => r.json()).then(i => {
+  $('info').textContent = `engine ${i.binary} · ${i.threads} threads · ${i.model}` + (i.encoder_available ? '' : ' · no encoder (cloning disabled)');
+  if (!i.encoder_available) $('ref').disabled = true;
+}).catch(() => { $('info').textContent = 'Engine info unavailable'; });
+
+function readFile(file) {
+  return new Promise((ok, err) => {
+    const r = new FileReader();
+    r.onload = () => ok(r.result.split(',')[1]);
+    r.onerror = err;
+    r.readAsDataURL(file);
+  });
+}
+
+$('form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('error').textContent = ''; $('result').hidden = true;
+  $('go').disabled = true;
+  const t0 = performance.now();
+  const tick = setInterval(() => { $('status').textContent = `Generating… ${((performance.now() - t0) / 1000).toFixed(1)} s`; }, 200);
+  try {
+    const body = {
+      text: $('text').value, caption: $('caption').value,
+      steps: +$('steps').value, seed: +$('seed').value,
+      dit_precision: $('dit').value, codec_precision: $('codec').value,
+    };
+    const f = $('ref').files[0];
+    if (f) body.reference_wav_base64 = await readFile(f);
+    const r = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    $('audio').src = j.wav_url + '?t=' + Date.now();
+    const rows = [
+      ['Audio', j.audio_seconds != null ? `${j.audio_seconds.toFixed(2)} s (${j.latent_frames} latent frames)` : '—'],
+      ['Encode / sampling / decode', j.total_seconds != null ? `${j.encode_seconds.toFixed(2)} / ${j.sample_seconds.toFixed(2)} / ${j.decode_seconds.toFixed(2)} s` : '—'],
+      ['Engine total', j.total_seconds != null ? `${j.total_seconds.toFixed(2)} s (RTF ${j.rtf.toFixed(2)})` : '—'],
+      ['Wall time incl. model load', `${j.wall_seconds.toFixed(2)} s`],
+      ['Precision', `DiT ${j.dit_precision}, codec ${j.codec_precision}, ${j.steps} steps, seed ${j.seed}`],
+    ];
+    $('stats').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+    $('log').textContent = j.log;
+    $('result').hidden = false;
+  } catch (e) {
+    $('error').textContent = e.message;
+  } finally {
+    clearInterval(tick); $('status').textContent = ''; $('go').disabled = false;
+  }
+});
+</script>
+</body>
+</html>
