@@ -5,8 +5,8 @@ Standard library only: serves static/index.html and a JSON API that runs the
 engine binary as a subprocess (one request at a time) and returns the WAV
 plus the timing line the CLI prints.
 
-    python3 demo/server.py                    # from the engine directory, auto-detects binary/weights
-    python3 server.py --model /path/to/model.safetensors --binary ../irodori-blas
+    ./setup-engine.sh && python3 server.py    # bare clone: fetch the release into ./engine, run
+    python3 demo/server.py                    # demo/ inside an engine checkout
     python3 server.py --help
 """
 from __future__ import annotations
@@ -33,7 +33,9 @@ TIMING_RE = re.compile(
 GENERATED_RE = re.compile(r"-> (\d+) latent frame -> ([\d.]+) s audio")
 
 
-ENGINE_DIR = ROOT.parent  # demo/ is checked out inside the engine directory
+# Where the engine lives: ./engine (filled by setup-engine.sh from a bare clone
+# of this repo) or the parent directory (demo/ checked out inside the engine).
+ENGINE_DIR = ROOT / "engine" if (ROOT / "engine" / "bin").is_dir() else ROOT.parent
 BINARY_CANDIDATES = ("irodori-onemkl", "irodori-blas", "irodori-mkl")
 
 
@@ -65,12 +67,12 @@ class Engine:
         binary = locate(args.binary, None)
         if binary is None and not args.binary:
             for name in BINARY_CANDIDATES:
-                binary = locate(None, name)
+                binary = locate(None, name) or locate(None, f"bin/{name}")
                 if binary:
                     break
         if binary is None:
             problems.append(f"engine binary not found ({args.binary or ', '.join(BINARY_CANDIDATES)}); "
-                            f"build it first, e.g. `make irodori-onemkl MKL_ROOT=...` or `make blas` in {ENGINE_DIR}")
+                            "run ./setup-engine.sh to fetch the prebuilt release, or build the engine")
         weights = locate(args.weights, "weights", must_exist=False) or ENGINE_DIR / "weights"
         model = None
         tried = []

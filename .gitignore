@@ -1,4 +1,6 @@
 outputs/
+downloads/
+engine/
 __pycache__/
 *.py[cod]
 *.wav
